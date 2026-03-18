@@ -4,4 +4,4 @@ dist
 .env
 backend/dist
 extension/dist
-
+*.zip
