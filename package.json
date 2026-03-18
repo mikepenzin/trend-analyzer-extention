@@ -1,0 +1,14 @@
+{
+  "name": "trend-analyzer",
+  "private": true,
+  "workspaces": [
+    "extension",
+    "backend"
+  ],
+  "scripts": {
+    "build": "npm run build -w extension && npm run build -w backend",
+    "dev": "npm run dev -w backend",
+    "typecheck": "npm run typecheck -w extension && npm run typecheck -w backend"
+  }
+}
+

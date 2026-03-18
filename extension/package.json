@@ -1,0 +1,17 @@
+{
+  "name": "trend-analyzer-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.321",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "marked": "^17.0.4"
+  }
+}
