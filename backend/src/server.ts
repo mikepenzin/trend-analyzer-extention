@@ -1,5 +1,8 @@
 import "dotenv/config";
 import express from "express";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createAnalyzeRouter } from "./routes/analyze.js";
 import { AIClient } from "./services/aiClient.js";
 import { GroqClient } from "./services/groqClient.js";
@@ -45,6 +48,13 @@ app.get("/", (_req, res) => {
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const privacyHtml = readFileSync(join(__dirname, "privacy.html"), "utf-8");
+app.get("/privacy", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(privacyHtml);
 });
 
 const allowedKeys = (process.env.ALLOWED_KEYS ?? "")
