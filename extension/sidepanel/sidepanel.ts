@@ -29,7 +29,7 @@ let currentPayload: CapturePayload | null = null;
 const chatHistory: Array<{ role: "user" | "assistant" | "notice"; text: string }> = [];
 let currentSymbol = "";
 let currentTicker = ""; // just the letters, e.g. "XLRE"
-let currentProvider = "gemini";
+let currentProvider = "openai";
 let currentSessionTs = 0; // timestamp of the current analysis session, reused for all follow-up saves
 
 const HISTORY_KEY = "analysisHistory";
