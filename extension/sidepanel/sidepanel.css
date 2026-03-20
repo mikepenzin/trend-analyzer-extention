@@ -542,6 +542,36 @@ h1 {
 .chat-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.screenshot-toggle {
+  display: inline-flex;
+  cursor: pointer;
+  user-select: none;
+}
+
+.screenshot-toggle input[type="checkbox"] {
+  display: none;
+}
+
+.screenshot-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #666);
+  padding: 6px 8px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.screenshot-toggle input[type="checkbox"]:checked + .screenshot-toggle-btn {
+  border-color: var(--accent, #8b5cf6);
+  color: var(--accent, #8b5cf6);
+  background: rgba(139, 92, 246, 0.07);
 }
 
 /* Loading animation */
@@ -684,6 +714,17 @@ h1 {
   border-radius: 14px;
   padding: 10px;
   background: rgba(255, 255, 255, 0.66);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.history-item:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.history-msg-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
 }
 
 .history-item button {

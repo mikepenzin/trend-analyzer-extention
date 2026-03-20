@@ -8,7 +8,8 @@
   "scripts": {
     "build": "npm run build -w extension && npm run build -w backend",
     "dev": "npm run dev -w backend",
-    "typecheck": "npm run typecheck -w extension && npm run typecheck -w backend"
+    "typecheck": "npm run typecheck -w extension && npm run typecheck -w backend",
+    "package": "npm run build -w extension && rm -f trend-analyzer-extension.zip && cd extension && zip -r ../trend-analyzer-extension.zip dist/ manifest.json icons/ sidepanel/sidepanel.css sidepanel/sidepanel.html && echo 'trend-analyzer-extension.zip ready'"
   }
 }
 

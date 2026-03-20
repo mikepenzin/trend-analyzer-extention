@@ -4,6 +4,7 @@ import { AIClient } from "../services/aiClient.js";
 import { GroqClient } from "../services/groqClient.js";
 import { OpenAIClient } from "../services/openaiClient.js";
 import { buildSystemPrompt, buildFollowUpSystemPrompt, buildUserPrompt, resolveMode } from "../services/promptBuilder.js";
+import type { ChatMessage } from "../types/shared.js";
 
 const linkSchema = z.object({
   text: z.string(),
@@ -24,11 +25,17 @@ const pageContextSchema = z.object({
   })
 });
 
+const chatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  text: z.string()
+});
+
 const analyzeRequestSchema = z.object({
   mode: z.enum(["auto", "page", "chart", "ui"]).default("auto"),
   provider: z.enum(["gemini", "groq", "openai", "both"]).default("gemini"),
   isFollowUp: z.boolean().default(false),
   userPrompt: z.string().default(""),
+  chatHistory: z.array(chatMessageSchema).default([]),
   screenshot: z.string().min(1),
   pageContext: pageContextSchema
 });
@@ -47,16 +54,26 @@ export function createAnalyzeRouter(clients: { gemini: AIClient; groq?: GroqClie
     }
 
     try {
-      const { mode, provider, isFollowUp, userPrompt, screenshot, pageContext } = parsed.data;
+      const { mode, provider, isFollowUp, userPrompt, chatHistory, screenshot, pageContext } = parsed.data;
       const resolvedMode = resolveMode(mode, pageContext);
       const systemPrompt = isFollowUp
         ? buildFollowUpSystemPrompt(resolvedMode, pageContext)
         : buildSystemPrompt(resolvedMode, pageContext);
-      const analyzeParams = {
-        systemPrompt,
-        userPrompt: buildUserPrompt(resolvedMode, pageContext, userPrompt),
-        screenshot
-      };
+
+      const useMultiTurn = isFollowUp && chatHistory.length > 0;
+      const analyzeParams = useMultiTurn
+        ? {
+            systemPrompt,
+            userPrompt,                                               // current question only
+            screenshot,
+            chatHistory: chatHistory as ChatMessage[],
+            initialContextPrompt: buildUserPrompt(resolvedMode, pageContext, "")
+          }
+        : {
+            systemPrompt,
+            userPrompt: buildUserPrompt(resolvedMode, pageContext, userPrompt),
+            screenshot
+          };
 
       let text: string;
 

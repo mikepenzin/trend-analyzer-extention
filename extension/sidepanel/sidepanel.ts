@@ -26,10 +26,11 @@ const licenseKeyError = document.querySelector<HTMLElement>("#license-key-error"
 
 // --- State ---
 let currentPayload: CapturePayload | null = null;
-const chatHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
+const chatHistory: Array<{ role: "user" | "assistant" | "notice"; text: string }> = [];
 let currentSymbol = "";
 let currentTicker = ""; // just the letters, e.g. "XLRE"
 let currentProvider = "gemini";
+let currentSessionTs = 0; // timestamp of the current analysis session, reused for all follow-up saves
 
 const HISTORY_KEY = "analysisHistory";
 const HISTORY_MAX = 20;
@@ -82,8 +83,8 @@ function setNotTradingView(isTV: boolean): void {
     notTradingViewState?.classList.add("hidden");
     headerCard?.classList.remove("hidden");
     settingsRow?.classList.remove("hidden");
-    // Show analyze button only if chat is not currently open
-    const chatIsActive = chatHistory.length > 0;
+    // Show analyze button only if chat is not currently open or loading
+    const chatIsActive = chatHistory.length > 0 || !chatView?.classList.contains("hidden");
     if (!chatIsActive) {
       initialState?.classList.remove("hidden");
     }
@@ -131,10 +132,12 @@ async function refreshTabInfo(): Promise<boolean> {
     // Ticker changed while chat is open → add notice, switch button to Analyze
     if (currentTicker && newTicker !== currentTicker && chatHistory.length > 0) {
       currentPayload = null;
+      const noticeText = `Ticker changed from ${currentTicker} to ${newTicker}`;
+      chatHistory.push({ role: "notice", text: noticeText });
       if (chatThread) {
         const notice = document.createElement("div");
         notice.className = "bubble-notice";
-        notice.textContent = `Ticker changed from ${currentTicker} to ${newTicker}`;
+        notice.textContent = noticeText;
         chatThread.appendChild(notice);
         notice.scrollIntoView({ behavior: "smooth", block: "end" });
       }
@@ -246,7 +249,8 @@ interface HistoryEntry {
   symbol: string;
   provider: string;
   ts: number;
-  text: string;
+  text: string; // kept for backwards compat with old entries
+  messages?: Array<{ role: "user" | "assistant" | "notice"; text: string }>;
 }
 
 async function loadHistory(): Promise<HistoryEntry[]> {
@@ -258,8 +262,73 @@ async function loadHistory(): Promise<HistoryEntry[]> {
 
 async function saveToHistory(entry: HistoryEntry): Promise<void> {
   const existing = await loadHistory();
-  const updated = [entry, ...existing].slice(0, HISTORY_MAX);
-  await chrome.storage.local.set({ [HISTORY_KEY]: updated });
+  // If the most recent entry is for the same symbol+session (same ts), update it in place
+  if (existing.length > 0 && existing[0].ts === entry.ts) {
+    existing[0] = entry;
+    await chrome.storage.local.set({ [HISTORY_KEY]: existing });
+  } else {
+    const updated = [entry, ...existing].slice(0, HISTORY_MAX);
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated });
+  }
+}
+
+function restoreConversation(entry: HistoryEntry): void {
+  // Save on-screen ticker before overwriting state
+  const onScreenTicker = currentTicker;
+  const entryTicker = entry.symbol.split(" ")[0];
+
+  // Reset state
+  chatHistory.length = 0;
+  currentPayload = null;
+  currentSessionTs = entry.ts;
+  currentSymbol = entry.symbol;
+  currentProvider = entry.provider;
+  if (pageTitle) pageTitle.textContent = entry.symbol;
+  if (providerSelect) providerSelect.value = entry.provider;
+  if (chatThread) chatThread.innerHTML = "";
+
+  // Replay messages into chat
+  const messages = entry.messages ?? [{ role: "assistant" as const, text: entry.text }];
+  for (const msg of messages) {
+    chatHistory.push(msg);
+    if (msg.role === "user") {
+      appendUserBubble(msg.text);
+    } else if (msg.role === "notice") {
+      const noticeEl = document.createElement("div");
+      noticeEl.className = "bubble-notice";
+      noticeEl.textContent = msg.text;
+      chatThread?.appendChild(noticeEl);
+    } else {
+      appendAssistantBubble({ text: msg.text, meta: { modeUsed: "chart", provider: entry.provider } });
+    }
+  }
+
+  // Close history panel and show chat
+  if (historyPanel) historyPanel.classList.add("hidden");
+  settingsRow?.classList.remove("hidden");
+  showChatView();
+
+  // Add notice that this is a restored conversation without the original screenshot
+  if (chatThread) {
+    const notice = document.createElement("div");
+    notice.className = "bubble-notice";
+    notice.textContent = "Restored from history — next message will capture a fresh chart screenshot.";
+    chatThread.appendChild(notice);
+
+    // Warn if on-screen ticker differs from the restored conversation's ticker
+    if (onScreenTicker && onScreenTicker !== entryTicker) {
+      const tickerNoticeText = `Chart changed: you're now viewing ${onScreenTicker}, but this conversation is about ${entryTicker}.`;
+      chatHistory.push({ role: "notice", text: tickerNoticeText });
+      const tickerNotice = document.createElement("div");
+      tickerNotice.className = "bubble-notice";
+      tickerNotice.textContent = tickerNoticeText;
+      chatThread.appendChild(tickerNotice);
+    }
+
+    chatThread.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  followUpInput?.focus();
 }
 
 function renderHistory(): void {
@@ -275,23 +344,35 @@ function renderHistory(): void {
       const item = document.createElement("div");
       item.className = "history-item";
       const date = new Date(entry.ts);
+      const msgCount = entry.messages ? entry.messages.length : 1;
       item.innerHTML = `
         <div class="history-meta">
           <span class="history-symbol">${entry.symbol}</span>
           <span class="model-badge">${entry.provider}</span>
           <span class="history-time">${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <span class="history-msg-count">${msgCount} msg${msgCount > 1 ? "s" : ""}</span>
           <button class="action-button history-export-btn" title="Export as Markdown">Export</button>
         </div>
         <p class="history-preview">${(entry.text ?? "").slice(0, 140)}…</p>
       `;
+
+      // Click anywhere on the item (except Export button) to resume conversation
+      item.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest(".history-export-btn")) return;
+        restoreConversation(entry);
+      });
       item.querySelector<HTMLButtonElement>(".history-export-btn")?.addEventListener("click", () => {
         const lines = [
           `# ${entry.symbol} — Analysis`,
           `Provider: ${entry.provider}`,
           `Date: ${new Date(entry.ts).toLocaleString()}`,
           "\n---\n",
-          entry.text,
         ];
+        const messages = entry.messages ?? [{ role: "assistant" as const, text: entry.text }];
+        for (const msg of messages) {
+          lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
+          lines.push("---\n");
+        }
         const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -316,7 +397,11 @@ function exportChat(): void {
     "\n---\n",
   ];
   for (const msg of chatHistory) {
-    lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
+    if (msg.role === "notice") {
+      lines.push(`> *${msg.text}*\n`);
+    } else {
+      lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
+    }
     lines.push("---\n");
   }
   const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
@@ -392,8 +477,12 @@ async function runAnalysis(appendToExisting = false): Promise<void> {
   clearError();
 
   if (!appendToExisting) {
-    showLoadingState();
     await refreshTabInfo();
+    chatHistory.length = 0;
+    currentSessionTs = 0;
+    if (chatThread) chatThread.innerHTML = "";
+    // Immediately switch to chat view with a thinking bubble
+    showChatView();
   }
 
   try {
@@ -406,30 +495,29 @@ async function runAnalysis(appendToExisting = false): Promise<void> {
 
     currentPayload = payload;
 
-    if (!appendToExisting) {
-      chatHistory.length = 0;
-      if (chatThread) chatThread.innerHTML = "";
-    }
+    const thinking = appendThinkingBubble();
+    if (sendFollowUpButton) sendFollowUpButton.disabled = true;
+    if (followUpInput) followUpInput.disabled = true;
 
-    let thinking: HTMLElement | undefined;
     if (appendToExisting) {
       appendUserBubble("Re-analyze");
-      thinking = appendThinkingBubble();
-      if (sendFollowUpButton) sendFollowUpButton.disabled = true;
     }
 
     const result = await callAnalyze(payload);
     chatHistory.push({ role: "assistant", text: result.text });
 
-    if (thinking) thinking.remove();
+    thinking.remove();
     appendAssistantBubble(result);
     showChatView();
+    if (followUpInput) followUpInput.disabled = false;
     followUpInput?.focus();
     if (sendFollowUpButton) sendFollowUpButton.disabled = false;
 
-    void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: Date.now(), text: result.text });
+    currentSessionTs = Date.now();
+    void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: currentSessionTs, text: result.text, messages: [...chatHistory] });
   } catch (error) {
-    if (!appendToExisting) showInitialState();
+    showInitialState();
+    if (followUpInput) followUpInput.disabled = false;
     if (sendFollowUpButton) sendFollowUpButton.disabled = false;
     setError(error instanceof Error ? error.message : "An unknown error occurred.");
   }
@@ -447,17 +535,37 @@ async function sendFollowUp(): Promise<void> {
   appendUserBubble(question);
   const thinking = appendThinkingBubble();
 
-  const historyText = chatHistory
-    .map((m) => (m.role === "user" ? `User: ${m.text}` : `Assistant: ${m.text}`))
-    .join("\n\n");
-  const userPrompt = `${historyText}\n\nUser: ${question}`;
+  const freshScreenshotToggle = document.querySelector<HTMLInputElement>("#fresh-screenshot-toggle");
+  const wantFreshScreenshot = freshScreenshotToggle?.checked || !currentPayload;
+
+  // Capture a fresh screenshot if toggled on or if there's no existing payload
+  if (wantFreshScreenshot) {
+    try {
+      const freshPayload = await sendMessage<CapturePayload & { error?: string }>({
+        type: "CAPTURE_PAGE_CONTEXT",
+        mode: "auto",
+      });
+      if (!freshPayload.error) {
+        currentPayload = freshPayload;
+      }
+    } catch { /* proceed with existing payload */ }
+    if (freshScreenshotToggle) freshScreenshotToggle.checked = false;
+  }
+
+  // Send the full chat history + current question to the backend for proper multi-turn context
+  // Filter out notice entries — they are UI-only and not meaningful to the AI
+  const historySnapshot = chatHistory.filter((m) => m.role !== "notice");
   chatHistory.push({ role: "user", text: question });
 
   try {
-    const result = await callAnalyze({ ...currentPayload, userPrompt }, true);
+    const result = await callAnalyze({ ...currentPayload, userPrompt: question, chatHistory: historySnapshot }, true);
     chatHistory.push({ role: "assistant", text: result.text });
     thinking.remove();
     appendAssistantBubble(result);
+    // Update the existing history entry with the full conversation
+    if (currentSessionTs) {
+      void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: currentSessionTs, text: chatHistory[0]?.text ?? "", messages: [...chatHistory] });
+    }
   } catch (error) {
     thinking.remove();
     setError(error instanceof Error ? error.message : "An unknown error occurred.");
@@ -565,7 +673,12 @@ providerSelect?.addEventListener("change", () => {
 // Listen for tab navigation / title changes from the service worker
 chrome.runtime.onMessage.addListener((message: { type: string }) => {
   if (message.type === "TAB_UPDATED") {
-    void refreshTabInfo();
+    void refreshTabInfo().then((isTV) => {
+      // Ensure the analyze button is visible when switching to a TradingView tab
+      if (isTV && chatHistory.length === 0) {
+        showInitialState();
+      }
+    });
   }
 });
 

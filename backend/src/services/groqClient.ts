@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import type { AnalysisResult } from "../types/shared.js";
+import type { AnalysisResult, ChatMessage } from "../types/shared.js";
 
 export class GroqClient {
   private readonly client: Groq;
@@ -14,10 +14,34 @@ export class GroqClient {
     systemPrompt: string;
     userPrompt: string;
     screenshot: string;
+    chatHistory?: ChatMessage[];
+    initialContextPrompt?: string;
   }): Promise<AnalysisResult> {
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      messages: [
+    type Message = Groq.Chat.ChatCompletionMessageParam;
+    let messages: Message[];
+
+    if (params.chatHistory && params.chatHistory.length > 0 && params.initialContextPrompt) {
+      // Multi-turn: reconstruct full conversation
+      messages = [
+        { role: "system", content: params.systemPrompt },
+        // Synthetic first turn: original chart context + screenshot
+        {
+          role: "user",
+          content: [
+            { type: "text", text: params.initialContextPrompt },
+            { type: "image_url", image_url: { url: params.screenshot } }
+          ]
+        },
+        // Previous turns from history
+        ...params.chatHistory.map((msg): Message => ({
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: msg.text
+        })),
+        // Current question
+        { role: "user", content: params.userPrompt }
+      ];
+    } else {
+      messages = [
         { role: "system", content: params.systemPrompt },
         {
           role: "user",
@@ -26,7 +50,12 @@ export class GroqClient {
             { type: "image_url", image_url: { url: params.screenshot } },
           ],
         },
-      ],
+      ];
+    }
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages,
     });
 
     const text = response.choices[0]?.message?.content;

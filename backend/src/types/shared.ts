@@ -1,6 +1,11 @@
 export type AnalysisMode = "auto" | "page" | "chart" | "ui";
 export type LLMProvider = "gemini" | "groq" | "openai" | "both";
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface PageLink {
   text: string;
   href: string;
