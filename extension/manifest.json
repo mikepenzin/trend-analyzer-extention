@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Trend Analyzer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI-powered browsing assistant for screenshot and DOM analysis.",
   "permissions": [
     "activeTab",
@@ -31,10 +31,26 @@
       "128": "icons/icon128-dark.png"
     },
     "theme_icons": [
-      { "light": "icons/icon16.png", "dark": "icons/icon16-dark.png", "size": 16 },
-      { "light": "icons/icon32.png", "dark": "icons/icon32-dark.png", "size": 32 },
-      { "light": "icons/icon64.png", "dark": "icons/icon64-dark.png", "size": 64 },
-      { "light": "icons/icon128.png", "dark": "icons/icon128-dark.png", "size": 128 }
+      {
+        "light": "icons/icon16.png",
+        "dark": "icons/icon16-dark.png",
+        "size": 16
+      },
+      {
+        "light": "icons/icon32.png",
+        "dark": "icons/icon32-dark.png",
+        "size": 32
+      },
+      {
+        "light": "icons/icon64.png",
+        "dark": "icons/icon64-dark.png",
+        "size": 64
+      },
+      {
+        "light": "icons/icon128.png",
+        "dark": "icons/icon128-dark.png",
+        "size": 128
+      }
     ]
   },
   "icons": {
@@ -44,4 +60,3 @@
     "128": "icons/icon128-dark.png"
   }
 }
-
