@@ -79,7 +79,14 @@ export default app;
 
 // Only listen locally (Vercel handles listening in production)
 if (!process.env.VERCEL) {
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Trend Analyzer backend listening on http://localhost:${port}`);
   });
+
+  // Graceful shutdown for tsx watch
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => {
+      server.close(() => process.exit(0));
+    });
+  }
 }

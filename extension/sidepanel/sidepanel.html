@@ -46,7 +46,7 @@
       </div>
 
       <!-- Settings row -->
-      <div class="settings-row">
+      <!-- <div class="settings-row">
         <label class="settings-label">
           <span>Provider</span>
           <select id="provider-select" class="settings-select">
@@ -55,7 +55,7 @@
             <option value="openai" selected>OpenAI ChatGPT</option>
           </select>
         </label>
-      </div>
+      </div> -->
 
       <!-- Initial state: just the analyze button -->
       <section class="panel-card" id="initial-state">
@@ -77,18 +77,23 @@
       <section class="panel-card hidden" id="chat-view">
         <div id="chat-thread"></div>
         <div class="chat-input-row">
-          <input
-            id="follow-up-input"
-            type="text"
-            class="input"
-            placeholder="Ask a follow-up..."
-          />
-          <p class="input-hint">⏎ send</p>
+          <div class="input-with-send">
+            <input
+              id="follow-up-input"
+              type="text"
+              class="input"
+              placeholder="Ask a follow-up..."
+            />
+            <button id="send-follow-up" class="send-icon-btn" title="Send">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M15.854.146a.5.5 0 0 1 .11.54l-5.819 14.547a.75.75 0 0 1-1.329.124l-3.178-4.995L.643 7.184a.75.75 0 0 1 .124-1.33L15.314.037a.5.5 0 0 1 .54.11ZM6.636 10.07l2.761 4.338L14.13 2.576zm6.787-8.201L1.591 6.602l4.339 2.76z"/></svg>
+            </button>
+          </div>
           <div class="chat-actions">
-            <button id="send-follow-up" class="action-button primary">Send</button>
             <button id="reanalyze-button" class="action-button" title="Re-analyze current chart">Re-analyze</button>
             <button id="export-chat" class="action-button" title="Export chat as Markdown">Export</button>
-            <button id="new-analysis" class="action-button">New Chat</button>
+            <button id="new-analysis" class="action-button" style="margin-left: auto;">New Chat</button>
+          </div>
+          <div class="chat-actions-secondary">
             <label class="screenshot-toggle" title="Capture a fresh chart screenshot with this message">
               <input type="checkbox" id="fresh-screenshot-toggle" />
               <span class="screenshot-toggle-btn">

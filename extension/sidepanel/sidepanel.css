@@ -528,11 +528,136 @@ h1 {
   text-align: center;
 }
 
+/* Agent step indicator — shown while the agentic loop is running */
+.agent-step-bubble {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  background: rgba(139, 92, 246, 0.07);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  color: var(--accent, #8b5cf6);
+  font-size: 0.78rem;
+  margin: 4px 0;
+  transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+
+.agent-step-bubble.agent-step-done {
+  background: rgba(15, 118, 110, 0.06);
+  border-color: rgba(15, 118, 110, 0.2);
+  color: var(--muted);
+}
+
+.agent-step-bubble.agent-step-thinking {
+  background: rgba(250, 204, 21, 0.06);
+  border-color: rgba(250, 204, 21, 0.25);
+  color: #92400e;
+}
+
+.agent-step-bubble.agent-step-summary {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--text);
+  font-style: italic;
+}
+
+.agent-step-bubble.agent-step-ta-data {
+  background: rgba(15, 118, 110, 0.05);
+  border-color: rgba(15, 118, 110, 0.2);
+  color: var(--text);
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.agent-step-check {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ta-data-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.ta-data-content strong {
+  font-size: 0.8rem;
+  color: var(--accent-strong);
+}
+
+.ta-data-pre {
+  margin: 0;
+  font-family: "Courier New", monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.agent-step-spinner {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(139, 92, 246, 0.3);
+  border-top-color: var(--accent, #8b5cf6);
+  border-radius: 50%;
+  animation: agent-spin 0.8s linear infinite;
+}
+
+@keyframes agent-spin {
+  to { transform: rotate(360deg); }
+}
+
 .chat-input-row {
   margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.input-with-send {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  position: relative;
+}
+
+.input-with-send .input {
+  flex: 1;
+  padding-right: 36px;
+}
+
+.send-icon-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent, #8b5cf6);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.send-icon-btn:hover {
+  opacity: 1;
+}
+
+.send-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .chat-input {
@@ -544,6 +669,12 @@ h1 {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.chat-actions-secondary {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
 }
 
 .screenshot-toggle {
@@ -566,6 +697,7 @@ h1 {
   border-radius: 14px;
   border: 1px solid transparent;
   transition: border-color 0.15s, background 0.15s;
+  white-space: nowrap;
 }
 
 .screenshot-toggle input[type="checkbox"]:checked + .screenshot-toggle-btn {

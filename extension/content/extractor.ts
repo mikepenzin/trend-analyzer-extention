@@ -1,9 +1,10 @@
 import type { AnalysisMode, PageContext, PageLink } from "../types";
 
-type ExtractRequest = {
-  type: "EXTRACT_PAGE_CONTEXT";
-  mode: AnalysisMode;
-};
+type ExtractRequest =
+  | { type: "EXTRACT_PAGE_CONTEXT"; mode: AnalysisMode }
+  | { type: "SHOW_OVERLAY" }
+  | { type: "UPDATE_OVERLAY"; step: string; status: "running" | "done" | "error" }
+  | { type: "HIDE_OVERLAY" };
 
 const TEXT_SELECTORS = "p, li, article, section, main, div, span";
 const HEADING_SELECTORS = "h1, h2, h3";
@@ -11,7 +12,112 @@ const MAX_TEXT_BLOCKS = 40;
 const MAX_LINKS = 25;
 const MAX_TEXT_LENGTH = 320;
 
+const OVERLAY_ID = "ta-analysis-overlay";
+
+function getOverlay(): HTMLElement | null {
+  return document.getElementById(OVERLAY_ID);
+}
+
+function showAnalysisOverlay(): void {
+  if (getOverlay()) return;
+  const overlay = document.createElement("div");
+  overlay.id = OVERLAY_ID;
+  overlay.innerHTML = `
+    <style>
+      #${OVERLAY_ID} {
+        position: fixed; inset: 0; z-index: 2147483647;
+        background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        pointer-events: auto;
+      }
+      #${OVERLAY_ID} .ta-card {
+        background: #1e1e2e; color: #cdd6f4; border-radius: 16px;
+        padding: 24px 28px; min-width: 320px; max-width: 400px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      }
+      #${OVERLAY_ID} .ta-title {
+        font-size: 14px; font-weight: 700; letter-spacing: 0.06em;
+        text-transform: uppercase; color: #a6adc8; margin: 0 0 16px;
+        display: flex; align-items: center; gap: 8px;
+      }
+      #${OVERLAY_ID} .ta-spinner {
+        width: 14px; height: 14px; border: 2px solid rgba(166,173,200,0.3);
+        border-top-color: #89b4fa; border-radius: 50%;
+        animation: ta-spin 0.7s linear infinite;
+      }
+      @keyframes ta-spin { to { transform: rotate(360deg); } }
+      #${OVERLAY_ID} .ta-steps { list-style: none; margin: 0; padding: 0; }
+      #${OVERLAY_ID} .ta-step {
+        font-size: 13px; padding: 6px 0; display: flex; align-items: center; gap: 8px;
+        color: #6c7086; transition: color 0.2s;
+      }
+      #${OVERLAY_ID} .ta-step.running { color: #89b4fa; }
+      #${OVERLAY_ID} .ta-step.done { color: #a6e3a1; }
+      #${OVERLAY_ID} .ta-step.error { color: #f38ba8; }
+      #${OVERLAY_ID} .ta-step-icon { flex-shrink: 0; width: 16px; text-align: center; }
+    </style>
+    <div class="ta-card">
+      <div class="ta-title"><div class="ta-spinner"></div> Analyzing chart</div>
+      <ul class="ta-steps"></ul>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function updateOverlayStep(step: string, status: "running" | "done" | "error"): void {
+  const overlay = getOverlay();
+  if (!overlay) return;
+  const stepsList = overlay.querySelector<HTMLUListElement>(".ta-steps");
+  if (!stepsList) return;
+
+  // Check if this step text already exists (update in place)
+  const existing = Array.from(stepsList.querySelectorAll<HTMLLIElement>(".ta-step"));
+  for (const li of existing) {
+    const textEl = li.querySelector(".ta-step-label");
+    if (textEl && textEl.textContent === step) {
+      li.className = `ta-step ${status}`;
+      const iconEl = li.querySelector(".ta-step-icon");
+      if (iconEl) iconEl.textContent = status === "done" ? "✓" : status === "error" ? "✗" : "›";
+      return;
+    }
+  }
+
+  // Mark any previously "running" step as done
+  for (const li of existing) {
+    if (li.classList.contains("running")) {
+      li.classList.remove("running");
+      li.classList.add("done");
+      const iconEl = li.querySelector(".ta-step-icon");
+      if (iconEl) iconEl.textContent = "✓";
+    }
+  }
+
+  const li = document.createElement("li");
+  li.className = `ta-step ${status}`;
+  li.innerHTML = `<span class="ta-step-icon">${status === "done" ? "✓" : status === "error" ? "✗" : "›"}</span><span class="ta-step-label">${step}</span>`;
+  stepsList.appendChild(li);
+}
+
+function hideAnalysisOverlay(): void {
+  getOverlay()?.remove();
+}
+
 chrome.runtime.onMessage.addListener((message: ExtractRequest, _sender, sendResponse) => {
+  if (message.type === "SHOW_OVERLAY") {
+    showAnalysisOverlay();
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message.type === "UPDATE_OVERLAY") {
+    updateOverlayStep(message.step, message.status);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message.type === "HIDE_OVERLAY") {
+    hideAnalysisOverlay();
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message.type !== "EXTRACT_PAGE_CONTEXT") {
     return false;
   }

@@ -16,6 +16,7 @@ export class OpenAIClient {
     screenshot: string;
     chatHistory?: ChatMessage[];
     initialContextPrompt?: string;
+    jsonMode?: boolean;
   }): Promise<AnalysisResult> {
     type Message = OpenAI.Chat.ChatCompletionMessageParam;
     let messages: Message[];
@@ -53,14 +54,32 @@ export class OpenAIClient {
       ];
     }
 
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-    });
+    // Retry once if OpenAI returns empty (can happen with large prompts + json mode)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        ...(params.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
+      });
 
-    const text = response.choices[0]?.message?.content;
-    if (!text) throw new Error("OpenAI returned no output text.");
+      const choice = response.choices[0];
+      const text = choice?.message?.content;
+      const finishReason = choice?.finish_reason;
 
-    return { text };
+      if (text) return { text };
+
+      // If finish_reason indicates a problem, don't retry
+      if (finishReason === "content_filter") {
+        throw new Error("OpenAI content filter blocked the response. Try rephrasing or using a different provider.");
+      }
+      if (finishReason === "length") {
+        throw new Error("OpenAI response was truncated due to token limits. Try a shorter prompt or different provider.");
+      }
+
+      // Log and retry once on empty
+      console.warn(`[OpenAI] Empty response on attempt ${attempt + 1}, finish_reason=${finishReason}. ${attempt === 0 ? "Retrying..." : ""}`);
+    }
+
+    throw new Error("OpenAI returned no output text after 2 attempts. Try using a different provider.");
   }
 }

@@ -26,6 +26,7 @@ export class AIClient {
     screenshot: string;
     chatHistory?: ChatMessage[];
     initialContextPrompt?: string;
+    jsonMode?: boolean;
   }): Promise<AnalysisResult> {
     const { base64, mimeType } = AIClient.parseDataUri(params.screenshot);
 
@@ -68,6 +69,7 @@ export class AIClient {
       config: {
         systemInstruction: [{ text: params.systemPrompt }],
         thinkingConfig: { thinkingBudget: -1 },
+        ...(params.jsonMode ? { responseMimeType: "application/json" } : {}),
       }
     });
 

@@ -16,6 +16,7 @@ export class GroqClient {
     screenshot: string;
     chatHistory?: ChatMessage[];
     initialContextPrompt?: string;
+    jsonMode?: boolean;
   }): Promise<AnalysisResult> {
     type Message = Groq.Chat.ChatCompletionMessageParam;
     let messages: Message[];
@@ -56,6 +57,7 @@ export class GroqClient {
     const response = await this.client.chat.completions.create({
       model: this.model,
       messages,
+      ...(params.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
     });
 
     const text = response.choices[0]?.message?.content;

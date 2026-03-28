@@ -1,7 +1,9 @@
-import type { AnalysisResult, CapturePayload } from "../types";
+import type { AnalysisResult, CapturePayload, AgentStepResult, TAResult } from "../types";
 import { marked } from "marked";
 
 marked.setOptions({ breaks: true });
+
+console.log("[TrendAnalyzer] Sidepanel loaded — agentic build v2");
 
 // --- DOM refs ---
 const pageTitle = document.querySelector<HTMLHeadingElement>("#page-title");
@@ -26,7 +28,7 @@ const licenseKeyError = document.querySelector<HTMLElement>("#license-key-error"
 
 // --- State ---
 let currentPayload: CapturePayload | null = null;
-const chatHistory: Array<{ role: "user" | "assistant" | "notice"; text: string }> = [];
+const chatHistory: Array<{ role: "user" | "assistant" | "notice" | "step" | "ta-data" | "summary"; text: string }> = [];
 let currentSymbol = "";
 let currentTicker = ""; // just the letters, e.g. "XLRE"
 let currentProvider = "openai";
@@ -35,6 +37,41 @@ let currentSessionTs = 0; // timestamp of the current analysis session, reused f
 const HISTORY_KEY = "analysisHistory";
 const HISTORY_MAX = 20;
 const LIC_KEY = "licenseKey";
+const SESSION_KEY = "activeSession";
+
+// --- Active session persistence ---
+
+interface ActiveSession {
+  chatHistory: Array<{ role: "user" | "assistant" | "notice" | "step" | "ta-data" | "summary"; text: string }>;
+  symbol: string;
+  ticker: string;
+  provider: string;
+  sessionTs: number;
+}
+
+function saveActiveSession(): void {
+  if (chatHistory.length === 0) {
+    void chrome.storage.local.remove(SESSION_KEY);
+    return;
+  }
+  const session: ActiveSession = {
+    chatHistory: [...chatHistory],
+    symbol: currentSymbol,
+    ticker: currentTicker,
+    provider: currentProvider,
+    sessionTs: currentSessionTs,
+  };
+  void chrome.storage.local.set({ [SESSION_KEY]: session });
+}
+
+async function loadActiveSession(): Promise<ActiveSession | null> {
+  const data = await chrome.storage.local.get({ [SESSION_KEY]: null });
+  return data[SESSION_KEY] as ActiveSession | null;
+}
+
+function clearActiveSession(): void {
+  void chrome.storage.local.remove(SESSION_KEY);
+}
 
 // --- Messaging ---
 
@@ -78,15 +115,25 @@ const headerCard = document.querySelector<HTMLElement>(".header-card");
 
 const reanalyzeButton = document.querySelector<HTMLButtonElement>("#reanalyze-button");
 
+function clearChat(): void {
+  currentPayload = null;
+  chatHistory.length = 0;
+  currentSessionTs = 0;
+  if (chatThread) chatThread.innerHTML = "";
+  if (reanalyzeButton) reanalyzeButton.textContent = "Re-analyze";
+  clearActiveSession();
+}
+
 function setNotTradingView(isTV: boolean): void {
   if (isTV) {
     notTradingViewState?.classList.add("hidden");
     headerCard?.classList.remove("hidden");
     settingsRow?.classList.remove("hidden");
-    // Show analyze button only if chat is not currently open or loading
-    const chatIsActive = chatHistory.length > 0 || !chatView?.classList.contains("hidden");
-    if (!chatIsActive) {
-      initialState?.classList.remove("hidden");
+    // Restore the correct view based on chat state
+    if (chatHistory.length > 0) {
+      showChatView();
+    } else {
+      showInitialState();
     }
   } else {
     notTradingViewState?.classList.remove("hidden");
@@ -142,6 +189,7 @@ async function refreshTabInfo(): Promise<boolean> {
         notice.scrollIntoView({ behavior: "smooth", block: "end" });
       }
       if (reanalyzeButton) reanalyzeButton.textContent = "Analyze";
+      saveActiveSession();
     }
 
     currentSymbol = newSymbol;
@@ -250,7 +298,7 @@ interface HistoryEntry {
   provider: string;
   ts: number;
   text: string; // kept for backwards compat with old entries
-  messages?: Array<{ role: "user" | "assistant" | "notice"; text: string }>;
+  messages?: Array<{ role: "user" | "assistant" | "notice" | "step" | "ta-data" | "summary"; text: string }>;
 }
 
 async function loadHistory(): Promise<HistoryEntry[]> {
@@ -298,6 +346,27 @@ function restoreConversation(entry: HistoryEntry): void {
       noticeEl.className = "bubble-notice";
       noticeEl.textContent = msg.text;
       chatThread?.appendChild(noticeEl);
+    } else if (msg.role === "step") {
+      const stepEl = document.createElement("div");
+      stepEl.className = "agent-step-bubble agent-step-action agent-step-done";
+      stepEl.innerHTML = `<span class="agent-step-check">✓</span><span class="agent-step-text">${escapeHtml(msg.text)}</span>`;
+      chatThread?.appendChild(stepEl);
+    } else if (msg.role === "ta-data") {
+      const [header, ...rest] = msg.text.split("\n");
+      const taEl = document.createElement("div");
+      taEl.className = "agent-step-bubble agent-step-ta-data agent-step-done";
+      taEl.innerHTML = `
+        <span class="agent-step-check">📊</span>
+        <div class="agent-step-text ta-data-content">
+          <strong>${escapeHtml(header)}</strong>
+          <pre class="ta-data-pre">${escapeHtml(rest.join("\n"))}</pre>
+        </div>`;
+      chatThread?.appendChild(taEl);
+    } else if (msg.role === "summary") {
+      const sumEl = document.createElement("div");
+      sumEl.className = "agent-step-bubble agent-step-summary agent-step-done";
+      sumEl.innerHTML = `<span class="agent-step-check">💭</span><span class="agent-step-text">${escapeHtml(msg.text)}</span>`;
+      chatThread?.appendChild(sumEl);
     } else {
       appendAssistantBubble({ text: msg.text, meta: { modeUsed: "chart", provider: entry.provider } });
     }
@@ -370,7 +439,17 @@ function renderHistory(): void {
         ];
         const messages = entry.messages ?? [{ role: "assistant" as const, text: entry.text }];
         for (const msg of messages) {
-          lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
+          if (msg.role === "step") {
+            lines.push(`> ✓ ${msg.text}\n`);
+          } else if (msg.role === "ta-data") {
+            lines.push(`\`\`\`\n📊 ${msg.text}\n\`\`\`\n`);
+          } else if (msg.role === "summary") {
+            lines.push(`> 💭 ${msg.text}\n`);
+          } else if (msg.role === "notice") {
+            lines.push(`> *${msg.text}*\n`);
+          } else {
+            lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
+          }
           lines.push("---\n");
         }
         const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
@@ -399,6 +478,12 @@ function exportChat(): void {
   for (const msg of chatHistory) {
     if (msg.role === "notice") {
       lines.push(`> *${msg.text}*\n`);
+    } else if (msg.role === "step") {
+      lines.push(`> ✓ ${msg.text}\n`);
+    } else if (msg.role === "ta-data") {
+      lines.push(`\`\`\`\n📊 ${msg.text}\n\`\`\`\n`);
+    } else if (msg.role === "summary") {
+      lines.push(`> 💭 ${msg.text}\n`);
     } else {
       lines.push(msg.role === "user" ? `**You:** ${msg.text}\n` : `**Assistant:**\n\n${msg.text}\n`);
     }
@@ -441,7 +526,7 @@ function hideLicenseGate(): void {
 
 async function callAnalyze(payload: object, isFollowUp = false): Promise<AnalysisResult> {
   const apiBaseUrl = await getApiBaseUrl();
-  const provider = providerSelect?.value ?? "gemini";
+  const provider = providerSelect?.value ?? "openai";
   currentProvider = provider;
   const licenseKey = await getLicenseKey();
 
@@ -471,6 +556,312 @@ async function callAnalyze(payload: object, isFollowUp = false): Promise<Analysi
   }
 
   return (await response.json()) as AnalysisResult;
+}
+
+// --- Agentic analysis ---
+
+async function callAnalyzeAgent(payload: object, agentTimeframe: string, symbol: string, previousTAResults: TAResult[], hasZoomed: boolean): Promise<AgentStepResult> {
+  const apiBaseUrl = await getApiBaseUrl();
+  const provider = providerSelect?.value ?? "openai";
+  currentProvider = provider;
+  const licenseKey = await getLicenseKey();
+
+  const response = await fetch(`${apiBaseUrl}/analyze`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(licenseKey ? { "X-License-Key": licenseKey } : {}),
+    },
+    body: JSON.stringify({ ...payload, provider, isAgentic: true, agentTimeframe, symbol, previousTAResults, hasZoomed }),
+  });
+
+  if (response.status === 401) {
+    await chrome.storage.local.remove(LIC_KEY);
+    showLicenseGate(true);
+    throw new Error("Access denied. Please enter a valid access key.");
+  }
+
+  if (!response.ok) {
+    let msg = `Server error: ${response.status}`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error) msg = body.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+
+  return (await response.json()) as AgentStepResult;
+}
+
+function appendAgentStepBubble(text: string, type: "action" | "ta-data" | "thinking" = "action"): HTMLElement {
+  const el = document.createElement("div");
+  el.className = `agent-step-bubble agent-step-${type}`;
+  el.innerHTML = `<span class="agent-step-spinner"></span><span class="agent-step-text">${escapeHtml(text)}</span>`;
+  chatThread?.appendChild(el);
+  el.scrollIntoView({ behavior: "smooth", block: "end" });
+  return el;
+}
+
+function finalizeAgentStepBubble(el: HTMLElement, text?: string): void {
+  const spinner = el.querySelector<HTMLElement>(".agent-step-spinner");
+  if (spinner) {
+    spinner.outerHTML = `<span class="agent-step-check">✓</span>`;
+  }
+  if (text) {
+    const textEl = el.querySelector<HTMLElement>(".agent-step-text");
+    if (textEl) textEl.innerHTML = text;
+  }
+  el.classList.add("agent-step-done");
+  el.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function formatTADataText(taData: TAResult): string {
+  const lines: string[] = [];
+  const ind = taData.indicators;
+
+  if (ind.rsi != null) lines.push(`RSI(14): ${ind.rsi.toFixed(1)}${ind.rsi > 70 ? " (overbought)" : ind.rsi < 30 ? " (oversold)" : ""}`);
+  if (ind.macdLine != null && ind.macdSignal != null) lines.push(`MACD: ${ind.macdLine.toFixed(2)} / Signal: ${ind.macdSignal.toFixed(2)}`);
+  if (ind.sma20 != null) lines.push(`SMA 20: ${ind.sma20.toFixed(2)}`);
+  if (ind.sma50 != null) lines.push(`SMA 50: ${ind.sma50.toFixed(2)}`);
+  if (ind.sma150 != null) lines.push(`SMA 150: ${ind.sma150.toFixed(2)}`);
+  if (ind.sma200 != null) lines.push(`SMA 200: ${ind.sma200.toFixed(2)}`);
+  if (ind.atr != null) lines.push(`ATR(14): ${ind.atr.toFixed(2)}`);
+  if (ind.adx != null) lines.push(`ADX: ${ind.adx.toFixed(1)}`);
+
+  if (taData.crossovers.length > 0) lines.push("", ...taData.crossovers.map(c => `⚡ ${c}`));
+  if (taData.candlestickPatterns.length > 0) {
+    lines.push("", ...taData.candlestickPatterns.map(p => `${p.type === "bullish" ? "🟢" : p.type === "bearish" ? "🔴" : "⚪"} ${p.name}`));
+  }
+  if (taData.chartPatterns.length > 0) {
+    lines.push("", ...taData.chartPatterns.map(p => `${p.type === "bullish" ? "🟢" : p.type === "bearish" ? "🔴" : "⚪"} ${p.name} (${p.confidence}, ${p.status})`));
+  }
+
+  return `${taData.timeframe} — ${taData.symbol}\n${lines.join("\n")}`;
+}
+
+function appendTADataBubble(taData: TAResult): HTMLElement {
+  const formatted = formatTADataText(taData);
+  const [header, ...rest] = formatted.split("\n");
+
+  const el = document.createElement("div");
+  el.className = "agent-step-bubble agent-step-ta-data agent-step-done";
+  el.innerHTML = `
+    <span class="agent-step-check">📊</span>
+    <div class="agent-step-text ta-data-content">
+      <strong>${escapeHtml(header)}</strong>
+      <pre class="ta-data-pre">${escapeHtml(rest.join("\n"))}</pre>
+    </div>`;
+  chatThread?.appendChild(el);
+  el.scrollIntoView({ behavior: "smooth", block: "end" });
+  return el;
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement("div");
+  div.appendChild(document.createTextNode(text));
+  return div.innerHTML;
+}
+
+function formatAgentAction(action: string, value?: string, reason?: string): string {
+  if (action === "change_timeframe") {
+    return `Switching to ${value ?? "different"} timeframe${reason ? ` — ${reason}` : ""}`;
+  }
+  if (action === "zoom_out") {
+    return `Zooming out for broader context${reason ? ` — ${reason}` : ""}`;
+  }
+  if (action === "fetch_data") {
+    return `Fetching OHLCV data${value ? ` for ${value}` : ""}${reason ? ` — ${reason}` : ""}`;
+  }
+  if (action === "analyze_patterns") {
+    return `Running pattern detection${reason ? ` — ${reason}` : ""}`;
+  }
+  return reason ?? "Thinking...";
+}
+
+async function runAgentAnalysis(appendToExisting = false): Promise<void> {
+  clearError();
+  await refreshTabInfo();
+  if (!appendToExisting) {
+    chatHistory.length = 0;
+    currentSessionTs = 0;
+    if (chatThread) chatThread.innerHTML = "";
+  } else {
+    // Add a separator notice when appending a new analysis
+    const noticeText = `── New analysis: ${currentTicker} ──`;
+    chatHistory.push({ role: "notice", text: noticeText });
+    if (chatThread) {
+      const notice = document.createElement("div");
+      notice.className = "bubble-notice";
+      notice.textContent = noticeText;
+      chatThread.appendChild(notice);
+      notice.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }
+  showChatView();
+  if (followUpInput) followUpInput.disabled = true;
+  if (sendFollowUpButton) sendFollowUpButton.disabled = true;
+
+  const MAX_STEPS = 6;
+  let step = 0;
+  let agentTimeframe = timeframeBadge?.textContent?.trim() ?? "";
+  let hasZoomed = false;
+  const previousTAResults: TAResult[] = [];
+
+  // Extract symbol from tab title
+  const symbolResult = await sendMessage<{ symbol?: string }>({ type: "EXTRACT_SYMBOL" });
+  const symbol = symbolResult?.symbol ?? "";
+
+  // Show overlay on TradingView page
+  await sendMessage({ type: "SHOW_OVERLAY" });
+  await sendMessage({ type: "UPDATE_OVERLAY", step: "Starting analysis...", status: "running" });
+
+  const startBubble = appendAgentStepBubble("Starting agentic analysis...");
+
+  try {
+    console.log("[Agent] Starting agentic analysis, symbol:", symbol, "timeframe:", agentTimeframe);
+
+    while (step <= MAX_STEPS) {
+      // Step: capture screenshot
+      const captureLabel = step === 0 ? "Capturing chart screenshot..." : `Step ${step + 1}: Re-capturing chart...`;
+      await sendMessage({ type: "UPDATE_OVERLAY", step: captureLabel, status: "running" });
+      if (step === 0) {
+        finalizeAgentStepBubble(startBubble, "Analysis started");
+        chatHistory.push({ role: "step", text: "Analysis started" });
+      }
+      const captureBubble = appendAgentStepBubble(captureLabel);
+
+      console.log(`[Agent] Step ${step}: capturing screenshot...`);
+      // Hide overlay before capturing so the chart is fully visible
+      await sendMessage({ type: "HIDE_OVERLAY" });
+      // Brief delay to let the overlay disappear before capture
+      await new Promise(r => setTimeout(r, 300));
+
+      const payload = await sendMessage<CapturePayload & { error?: string }>({
+        type: "CAPTURE_PAGE_CONTEXT",
+        mode: "auto",
+      });
+      if (payload.error) throw new Error(payload.error);
+      currentPayload = payload;
+
+      // Restore overlay after capture
+      await sendMessage({ type: "SHOW_OVERLAY" });
+
+      // Debug: download the screenshot so we can see what the AI receives
+      // if (payload.screenshot) {
+      //   try {
+      //     const link = document.createElement("a");
+      //     link.href = payload.screenshot;
+      //     link.download = `debug_screenshot_step${step}_${agentTimeframe || "unknown"}_${Date.now()}.png`;
+      //     link.click();
+      //   } catch (e) { console.warn("[Agent] Failed to save debug screenshot:", e); }
+      // }
+
+      finalizeAgentStepBubble(captureBubble, "Screenshot captured");
+      chatHistory.push({ role: "step", text: "Screenshot captured" });
+      await sendMessage({ type: "UPDATE_OVERLAY", step: captureLabel, status: "done" });
+
+      // Detect timeframe from page context on first step if badge was empty
+      if (step === 0 && !agentTimeframe) {
+        const allText = [
+          payload.pageContext.title,
+          ...payload.pageContext.headings,
+          ...payload.pageContext.visibleText.slice(0, 10),
+        ].join(" ");
+        const tfMatch = allText.match(/\b(1[Ww]|[Ww])\b/) ? "1W"
+          : allText.match(/\b(1[Dd]|[Dd])\b/) ? "1D"
+          : allText.match(/\b(1[Mm]|[Mm])\b/) ? "1M"
+          : allText.match(/\b(4[Hh]|4h)\b/) ? "4H"
+          : allText.match(/\b(1[Hh]|1h|60)\b/) ? "1H"
+          : allText.match(/\b(15m|15)\b/) ? "15m"
+          : allText.match(/\b(5m|5)\b/) ? "5m"
+          : "";
+        if (tfMatch) {
+          agentTimeframe = tfMatch;
+          console.log("[Agent] Detected timeframe from page context:", agentTimeframe);
+        }
+      }
+
+      // Step: send to AI with TA data
+      const analyzeLabel = `Analyzing ${agentTimeframe || "current"} timeframe...`;
+      await sendMessage({ type: "UPDATE_OVERLAY", step: analyzeLabel, status: "running" });
+      const analyzeBubble = appendAgentStepBubble(analyzeLabel, "thinking");
+
+      console.log(`[Agent] Step ${step}: calling backend, timeframe=${agentTimeframe}, symbol=${symbol}`);
+      const agentResult = await callAnalyzeAgent(payload, agentTimeframe, symbol, previousTAResults, hasZoomed);
+      console.log("[Agent] Backend response:", JSON.stringify(agentResult).slice(0, 300));
+
+      finalizeAgentStepBubble(analyzeBubble, `${agentTimeframe || "Current"} timeframe analyzed`);
+      chatHistory.push({ role: "step", text: `${agentTimeframe || "Current"} timeframe analyzed` });
+      await sendMessage({ type: "UPDATE_OVERLAY", step: analyzeLabel, status: "done" });
+
+      // Show TA data if returned
+      if (agentResult.taData) {
+        previousTAResults.push(agentResult.taData);
+        appendTADataBubble(agentResult.taData);
+        chatHistory.push({ role: "ta-data", text: formatTADataText(agentResult.taData) });
+      }
+
+      // Show step summary from AI
+      if (agentResult.stepSummary) {
+        const summaryBubble = document.createElement("div");
+        summaryBubble.className = "agent-step-bubble agent-step-summary agent-step-done";
+        summaryBubble.innerHTML = `<span class="agent-step-check">💭</span><span class="agent-step-text">${escapeHtml(agentResult.stepSummary)}</span>`;
+        chatThread?.appendChild(summaryBubble);
+        summaryBubble.scrollIntoView({ behavior: "smooth", block: "end" });
+        chatHistory.push({ role: "summary", text: agentResult.stepSummary });
+      }
+
+      if (agentResult.action === "done" || !agentResult.action) {
+        console.log("[Agent] Action=done, showing final analysis");
+        const text = agentResult.text ?? "";
+        chatHistory.push({ role: "assistant", text });
+        appendAssistantBubble({ text, meta: { modeUsed: "chart", provider: currentProvider } });
+        currentSessionTs = Date.now();
+        void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: currentSessionTs, text, messages: [...chatHistory] });
+        saveActiveSession();
+
+        await sendMessage({ type: "UPDATE_OVERLAY", step: "Analysis complete", status: "done" });
+        // Auto-hide overlay after a moment
+        setTimeout(() => { void sendMessage({ type: "HIDE_OVERLAY" }); }, 1500);
+        break;
+      }
+
+      if (step >= MAX_STEPS) {
+        throw new Error(`Agent reached ${MAX_STEPS} steps without completing analysis.`);
+      }
+
+      // Execute the agent's action
+      const actionLabel = formatAgentAction(agentResult.action, agentResult.value, agentResult.reason);
+      await sendMessage({ type: "UPDATE_OVERLAY", step: actionLabel, status: "running" });
+      const actionBubble = appendAgentStepBubble(actionLabel);
+
+      console.log(`[Agent] Action=${agentResult.action}, value=${agentResult.value}, reason=${agentResult.reason}`);
+      await sendMessage({ type: "EXECUTE_TV_ACTION", action: agentResult.action, value: agentResult.value });
+
+      finalizeAgentStepBubble(actionBubble);
+      chatHistory.push({ role: "step", text: actionLabel });
+      await sendMessage({ type: "UPDATE_OVERLAY", step: actionLabel, status: "done" });
+
+      if (agentResult.action === "change_timeframe" && agentResult.value) {
+        agentTimeframe = agentResult.value;
+      }
+      if (agentResult.action === "zoom_out") {
+        hasZoomed = true;
+      }
+      step++;
+    }
+  } catch (error) {
+    console.error("[Agent] Error:", error);
+    const errMsg = error instanceof Error ? error.message : "An unknown error occurred.";
+    await sendMessage({ type: "UPDATE_OVERLAY", step: `Error: ${errMsg}`, status: "error" });
+    setTimeout(() => { void sendMessage({ type: "HIDE_OVERLAY" }); }, 3000);
+    showInitialState();
+    setError(errMsg);
+  } finally {
+    if (followUpInput) followUpInput.disabled = false;
+    if (sendFollowUpButton) sendFollowUpButton.disabled = false;
+    followUpInput?.focus();
+  }
 }
 
 async function runAnalysis(appendToExisting = false): Promise<void> {
@@ -515,6 +906,7 @@ async function runAnalysis(appendToExisting = false): Promise<void> {
 
     currentSessionTs = Date.now();
     void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: currentSessionTs, text: result.text, messages: [...chatHistory] });
+    saveActiveSession();
   } catch (error) {
     showInitialState();
     if (followUpInput) followUpInput.disabled = false;
@@ -565,6 +957,7 @@ async function sendFollowUp(): Promise<void> {
     // Update the existing history entry with the full conversation
     if (currentSessionTs) {
       void saveToHistory({ symbol: currentSymbol, provider: currentProvider, ts: currentSessionTs, text: chatHistory[0]?.text ?? "", messages: [...chatHistory] });
+      saveActiveSession();
     }
   } catch (error) {
     thinking.remove();
@@ -589,7 +982,60 @@ async function init(): Promise<void> {
   const isTV = await refreshTabInfo();
   const settings = await sendMessage<{ apiBaseUrl: string; provider?: string }>({ type: "GET_SETTINGS" });
   if (providerSelect && settings.provider) providerSelect.value = settings.provider;
-  if (isTV) showInitialState();
+
+  // Restore active session if one exists
+  const savedSession = await loadActiveSession();
+  if (savedSession && savedSession.chatHistory.length > 0) {
+    chatHistory.length = 0;
+    currentPayload = null;
+    currentSessionTs = savedSession.sessionTs;
+    currentSymbol = savedSession.symbol;
+    currentTicker = savedSession.ticker;
+    currentProvider = savedSession.provider;
+    if (pageTitle) pageTitle.textContent = currentSymbol;
+    if (providerSelect) providerSelect.value = currentProvider;
+    if (chatThread) chatThread.innerHTML = "";
+
+    for (const msg of savedSession.chatHistory) {
+      chatHistory.push(msg);
+      if (msg.role === "user") {
+        appendUserBubble(msg.text);
+      } else if (msg.role === "notice") {
+        const noticeEl = document.createElement("div");
+        noticeEl.className = "bubble-notice";
+        noticeEl.textContent = msg.text;
+        chatThread?.appendChild(noticeEl);
+      } else if (msg.role === "step") {
+        const stepEl = document.createElement("div");
+        stepEl.className = "agent-step-bubble agent-step-action agent-step-done";
+        stepEl.innerHTML = `<span class="agent-step-check">✓</span><span class="agent-step-text">${escapeHtml(msg.text)}</span>`;
+        chatThread?.appendChild(stepEl);
+      } else if (msg.role === "ta-data") {
+        const [header, ...rest] = msg.text.split("\n");
+        const taEl = document.createElement("div");
+        taEl.className = "agent-step-bubble agent-step-ta-data agent-step-done";
+        taEl.innerHTML = `
+          <span class="agent-step-check">📊</span>
+          <div class="agent-step-text ta-data-content">
+            <strong>${escapeHtml(header)}</strong>
+            <pre class="ta-data-pre">${escapeHtml(rest.join("\n"))}</pre>
+          </div>`;
+        chatThread?.appendChild(taEl);
+      } else if (msg.role === "summary") {
+        const sumEl = document.createElement("div");
+        sumEl.className = "agent-step-bubble agent-step-summary agent-step-done";
+        sumEl.innerHTML = `<span class="agent-step-check">💭</span><span class="agent-step-text">${escapeHtml(msg.text)}</span>`;
+        chatThread?.appendChild(sumEl);
+      } else {
+        appendAssistantBubble({ text: msg.text, meta: { modeUsed: "chart", provider: currentProvider } });
+      }
+    }
+    showChatView();
+    followUpInput?.focus();
+  } else if (isTV) {
+    showInitialState();
+  }
+
   startTimestampUpdater();
 }
 
@@ -611,25 +1057,23 @@ licenseKeyInput?.addEventListener("keydown", (e) => {
 
 // --- Events ---
 
-analyzeButton?.addEventListener("click", () => void runAnalysis());
+analyzeButton?.addEventListener("click", () => void runAgentAnalysis());
 sendFollowUpButton?.addEventListener("click", () => void sendFollowUp());
 
 reanalyzeButton?.addEventListener("click", () => {
   if (reanalyzeButton?.textContent === "Analyze") {
-    // New ticker — do a fresh analysis but keep chat thread
-    void runAnalysis(true);
+    // New ticker — append analysis to existing chat
+    void runAgentAnalysis(true);
     reanalyzeButton.textContent = "Re-analyze";
   } else {
-    void runAnalysis(true);
+    void runAgentAnalysis();
   }
 });
 
 document.querySelector<HTMLButtonElement>("#export-chat")?.addEventListener("click", exportChat);
 
 document.querySelector<HTMLButtonElement>("#new-analysis")?.addEventListener("click", () => {
-  currentPayload = null;
-  chatHistory.length = 0;
-  if (chatThread) chatThread.innerHTML = "";
+  clearChat();
   if (timeframeBadge) timeframeBadge.classList.add("hidden");
   showInitialState();
 });
